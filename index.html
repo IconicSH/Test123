@@ -56,7 +56,6 @@ width:100%;
 margin-top:6px;
 font-size:14px;
 }
-
 </style>
 </head>
 
@@ -85,9 +84,9 @@ font-size:14px;
 
 <script>
 
-const ORS_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImUwMDJjNzVjMThhOTRiMTJiNDAzZjgwMjQzMWQ3ZWVjIiwiaCI6Im11cm11cjY0In0="
+const ORS_KEY="eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImUwMDJjNzVjMThhOTRiMTJiNDAzZjgwMjQzMWQ3ZWVjIiwiaCI6Im11cm11cjY0In0="
 
-let map = L.map("map").setView([43.7,-79.4],13)
+let map=L.map("map").setView([43.7,-79.4],13)
 
 L.tileLayer(
 "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -101,6 +100,7 @@ let routeLayer
 let lastPos=null
 let lastTime=null
 let speed=0
+let lastRouteUpdate=0
 
 const search=document.getElementById("search")
 const suggestions=document.getElementById("suggestions")
@@ -109,9 +109,21 @@ const speedDiv=document.getElementById("speed")
 const distDiv=document.getElementById("distance")
 const etaDiv=document.getElementById("eta")
 
-// GPS tracking
+function initLocation(pos){
 
-navigator.geolocation.watchPosition(pos=>{
+let lat=pos.coords.latitude
+let lng=pos.coords.longitude
+
+lastPos=[lat,lng]
+lastTime=Date.now()
+
+userMarker=L.marker([lat,lng]).addTo(map)
+
+map.setView([lat,lng],16)
+
+}
+
+function updateLocation(pos){
 
 let lat=pos.coords.latitude
 let lng=pos.coords.longitude
@@ -127,33 +139,30 @@ if(t>0){
 speed=(d/t)*3.6
 }
 
+speedDiv.innerText="Speed: "+speed.toFixed(1)+" km/h"
+
+if(destMarker && d>20 && now-lastRouteUpdate>3000){
+updateRoute()
+lastRouteUpdate=now
+}
+
 }
 
 lastPos=[lat,lng]
 lastTime=now
 
-speedDiv.innerText="Speed: "+speed.toFixed(1)+" km/h"
-
-if(!userMarker){
-
-userMarker=L.marker([lat,lng]).addTo(map)
-
-map.setView([lat,lng],16)
-
-}
-else{
-
+if(userMarker){
 userMarker.setLatLng([lat,lng])
+}
 
 }
 
-if(destMarker){
-updateRoute()
+function error(e){
+console.error(e)
 }
 
-},{enableHighAccuracy:true})
-
-// recenter
+navigator.geolocation.getCurrentPosition(initLocation,error,{enableHighAccuracy:true})
+navigator.geolocation.watchPosition(updateLocation,error,{enableHighAccuracy:true})
 
 document.getElementById("recenter").onclick=()=>{
 
@@ -168,12 +177,9 @@ map.setView([lat,lng],17)
 
 }
 
-// autocomplete
-
 search.addEventListener("input",async()=>{
 
 let q=search.value
-
 suggestions.innerHTML=""
 
 if(q.length<3) return
@@ -181,15 +187,12 @@ if(q.length<3) return
 let url=`https://api.openrouteservice.org/geocode/autocomplete?api_key=${ORS_KEY}&text=${encodeURIComponent(q)}`
 
 let res=await fetch(url)
-
 let data=await res.json()
 
 data.features.slice(0,5).forEach(f=>{
 
 let div=document.createElement("div")
-
 div.className="suggestion"
-
 div.innerText=f.properties.label
 
 div.onclick=()=>selectPlace(f)
@@ -200,16 +203,13 @@ suggestions.appendChild(div)
 
 })
 
-// select suggestion
-
 function selectPlace(f){
 
 let [lng,lat]=f.geometry.coordinates
 
 if(destMarker){
 destMarker.setLatLng([lat,lng])
-}
-else{
+}else{
 destMarker=L.marker([lat,lng]).addTo(map)
 }
 
@@ -219,8 +219,6 @@ updateRoute()
 
 }
 
-// navigate button
-
 document.getElementById("go").onclick=async()=>{
 
 let q=search.value
@@ -228,7 +226,6 @@ let q=search.value
 let url=`https://api.openrouteservice.org/geocode/search?api_key=${ORS_KEY}&text=${encodeURIComponent(q)}`
 
 let res=await fetch(url)
-
 let data=await res.json()
 
 if(data.features.length==0) return
@@ -236,8 +233,6 @@ if(data.features.length==0) return
 selectPlace(data.features[0])
 
 }
-
-// routing
 
 async function updateRoute(){
 
@@ -278,12 +273,8 @@ opacity:0.7
 
 map.fitBounds(routeLayer.getBounds(),{padding:[40,40]})
 
-// distance
-
 let dist=route.properties.segments[0].distance/1000
 distDiv.innerText="Distance: "+dist.toFixed(2)+" km"
-
-// ETA
 
 let sec=route.properties.segments[0].duration
 let min=Math.round(sec/60)
@@ -293,6 +284,5 @@ etaDiv.innerText="ETA: "+min+" minutes"
 }
 
 </script>
-
 </body>
 </html>

@@ -1,192 +1,180 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Live Map Tracker</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
-  <style>
-    body, html { margin:0; padding:0; height:100%; }
-    #map { height:100%; }
-    #controls {
-      position:absolute; top:10px; left:80px; /* offset from Leaflet zoom buttons */
-      z-index:1000;
-      background:#fff; padding:8px; border-radius:5px;
-      width:260px; box-shadow:0 0 5px rgba(0,0,0,0.3);
-      font-family:Arial, sans-serif; font-size:14px;
-    }
-    #search { width: 100%; padding:4px; }
-    #suggestions {
-      border:1px solid #ccc; margin-top:2px;
-      max-height:100px; overflow-y:auto; font-size:14px;
-    }
-    .suggestion-item { padding:5px; cursor:pointer; }
-    .suggestion-item.active { background:#eee; }
-    #standard { font-size:13px; color:#555; margin-top:2px; min-height:1.2em; }
-    #eta { margin-top:5px; font-weight:bold; }
-    button { margin-top:5px; width:100%; padding:6px; }
-  </style>
+<meta charset="UTF-8">
+<title>Advanced Live Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+<style>
+  #map { height: 100vh; }
+  #controls {
+    position: absolute;
+    top: 10px;
+    left: 80px; /* avoids Leaflet zoom buttons */
+    z-index: 1000;
+    background: white;
+    padding: 10px;
+    border-radius: 5px;
+    width: 260px;
+  }
+  #search { width: 100%; padding: 5px; }
+  #suggestions {
+    border: 1px solid #ccc;
+    max-height: 120px;
+    overflow-y: auto;
+    background: white;
+    margin-top: 2px;
+  }
+  .suggestion-item {
+    padding: 5px;
+    cursor: pointer;
+  }
+  .suggestion-item:hover { background: #eee; }
+  #eta, #standardAddress { margin-top: 5px; font-size: 0.9em; }
+  #recenterBtn { margin-top: 5px; width: 100%; }
+</style>
 </head>
 <body>
-  <div id="controls">
-    <input type="text" id="search" placeholder="Enter destination" autocomplete="off" aria-label="Destination search"/>
-    <div id="suggestions"></div>
-    <div id="standard"></div>
-    <button id="goBtn">Go</button>
-    <button id="toggleFollow">Follow: ON</button>
-    <button id="recenterBtn">Recenter</button>
-    <div id="eta"></div>
-  </div>
-  <div id="map"></div>
 
-  <!-- Leaflet.js -->
-  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-  <script>
-    const ORS_KEY = "YOUR_OPENROUTESERVICE_API_KEY"; // <-- replace with valid key
+<div id="controls">
+  <input type="text" id="search" placeholder="Enter destination" autocomplete="off"/>
+  <div id="suggestions"></div>
+  <button id="goBtn">Go</button>
+  <button id="toggleFollow">Follow Me: ON</button>
+  <button id="recenterBtn">Recenter on Me</button>
+  <div id="standardAddress"></div>
+  <div id="eta"></div>
+</div>
 
-    let followUser = true, userMarker=null, destinationMarker=null, routeLayer=null;
-    let lastPosition = null, selectedIndex = -1, debounceTimer;
-    const map = L.map('map').setView([0,0], 2);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
-    }).addTo(map);
+<div id="map"></div>
 
-    // Toggle follow mode
-    document.getElementById("toggleFollow").addEventListener("click", () => {
-      followUser = !followUser;
-      document.getElementById("toggleFollow").innerText = `Follow: ${followUser?'ON':'OFF'}`;
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script>
+const ORS_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImUwMDJjNzVjMThhOTRiMTJiNDAzZjgwMjQzMWQ3ZWVjIiwiaCI6Im11cm11cjY0In0=";
+
+let followUser = true;
+let userMarker = null;
+let destinationMarker = null;
+let routeLayer = null;
+let lastPosition = null;
+
+// Initialize map
+const map = L.map('map').setView([43.7, -79.4], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+// Follow toggle
+document.getElementById("toggleFollow").addEventListener("click", () => {
+  followUser = !followUser;
+  document.getElementById("toggleFollow").innerText = `Follow Me: ${followUser ? "ON" : "OFF"}`;
+});
+
+// Recenter button
+document.getElementById("recenterBtn").addEventListener("click", () => {
+  if(lastPosition) map.setView(lastPosition, map.getZoom());
+});
+
+// Watch user location
+navigator.geolocation.watchPosition(function(pos){
+  const latlng = [pos.coords.latitude, pos.coords.longitude];
+  lastPosition = latlng;
+
+  if(!userMarker) userMarker = L.marker(latlng).addTo(map).bindPopup("You are here").openPopup();
+  else userMarker.setLatLng(latlng);
+
+  if(followUser) map.setView(latlng, map.getZoom());
+
+  if(destinationMarker) updateRoute();
+}, console.error, { enableHighAccuracy: true });
+
+// Autocomplete
+const searchInput = document.getElementById("search");
+const suggestionsDiv = document.getElementById("suggestions");
+const standardAddressDiv = document.getElementById("standardAddress");
+
+searchInput.addEventListener("input", async () => {
+  const query = searchInput.value;
+  suggestionsDiv.innerHTML = "";
+  standardAddressDiv.innerText = "";
+
+  if(!query) return;
+
+  try {
+    const res = await fetch(`https://api.openrouteservice.org/geocode/autocomplete?api_key=${ORS_KEY}&text=${encodeURIComponent(query)}`);
+    if(!res.ok) throw new Error(`HTTP error ${res.status}`);
+    const data = await res.json();
+    if(!data.features) return;
+
+    data.features.slice(0,5).forEach(f => {
+      const item = document.createElement("div");
+      item.className = "suggestion-item";
+      item.innerText = f.properties.label;
+      item.onclick = () => selectSuggestion(f);
+      suggestionsDiv.appendChild(item);
     });
-    // Recenter button
-    document.getElementById("recenterBtn").addEventListener("click", () => {
-      if(lastPosition) map.setView(lastPosition, map.getZoom());
-    });
+  } catch(e) {
+    console.error("Error fetching suggestions:", e);
+  }
+});
 
-    // Track user location
-    navigator.geolocation.watchPosition(pos => {
-      const lat = pos.coords.latitude, lng = pos.coords.longitude;
-      lastPosition = [lat, lng];
-      if(!userMarker) {
-        userMarker = L.marker([lat,lng]).addTo(map).bindPopup("You are here").openPopup();
-      } else {
-        userMarker.setLatLng([lat,lng]);
-      }
-      if(followUser) map.setView([lat,lng], map.getZoom());
-      if(destinationMarker) updateRoute();
-    }, err => {
-      console.error("Geolocation error:", err);
-      if(err.code == 1) alert("Location permission denied.");
-    }, { enableHighAccuracy: true });
+function selectSuggestion(feature){
+  const [lng, lat] = feature.geometry.coordinates;
 
-    // Autocomplete suggestions
-    const searchInput = document.getElementById("search");
-    const suggestionsDiv = document.getElementById("suggestions");
-    searchInput.addEventListener("input", () => {
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(fetchSuggestions, 300);
-    });
-    async function fetchSuggestions() {
-      const query = searchInput.value.trim();
-      suggestionsDiv.innerHTML = "";
-      selectedIndex = -1;
-      document.getElementById("standard").innerText = "";
-      if(!query) return;
-      try {
-        const res = await fetch(`https://api.openrouteservice.org/geocode/autocomplete?api_key=${ORS_KEY}&text=${encodeURIComponent(query)}`);
-        if(!res.ok) throw new Error('Autocomplete failed');
-        const data = await res.json();
-        if(data.features && data.features.length) {
-          data.features.slice(0,5).forEach((f,i) => {
-            const label = f.properties.label;
-            const item = document.createElement("div");
-            item.className = "suggestion-item";
-            item.innerText = label;
-            item.onclick = () => { selectSuggestion(f); };
-            suggestionsDiv.appendChild(item);
-          });
-        } else {
-          suggestionsDiv.innerText = "No results";
-        }
-      } catch(err) {
-        console.error(err);
-        suggestionsDiv.innerText = "Error fetching suggestions";
-      }
-    }
+  if(destinationMarker) destinationMarker.setLatLng([lat,lng]);
+  else destinationMarker = L.marker([lat,lng], {color:'red'}).addTo(map).bindPopup("Destination").openPopup();
 
-    // Handle suggestion selection
-    function selectSuggestion(feature) {
-      const [lng, lat] = feature.geometry.coordinates;
-      if(destinationMarker) {
-        destinationMarker.setLatLng([lat,lng]);
-      } else {
-        destinationMarker = L.marker([lat,lng]).addTo(map).bindPopup("Destination").openPopup();
-      }
-      document.getElementById("standard").innerText = feature.properties.label;
-      suggestionsDiv.innerHTML = "";
-      updateRoute();
-    }
+  updateRoute();
+  standardAddressDiv.innerText = feature.properties.label; // show ORS address without overwriting input
+  suggestionsDiv.innerHTML = "";
+}
 
-    // "Go" button: full text search
-    document.getElementById("goBtn").addEventListener("click", async () => {
-      const query = searchInput.value.trim();
-      if(!query) return;
-      try {
-        const res = await fetch(`https://api.openrouteservice.org/geocode/search?api_key=${ORS_KEY}&text=${encodeURIComponent(query)}`);
-        if(!res.ok) throw new Error('Geocode failed');
-        const data = await res.json();
-        if(data.features && data.features.length) {
-          selectSuggestion(data.features[0]);
-        } else {
-          alert("Location not found");
-        }
-      } catch(err) {
-        console.error(err);
-        alert("Search failed");
-      }
-    });
+// Go button
+document.getElementById("goBtn").addEventListener("click", async () => {
+  const query = searchInput.value;
+  if(!query) return;
 
-    // Keyboard navigation in suggestions
-    searchInput.addEventListener("keydown", e => {
-      const items = suggestionsDiv.getElementsByClassName("suggestion-item");
-      if(items.length > 0 && ["ArrowDown","ArrowUp","Enter"].includes(e.key)) {
-        e.preventDefault();
-        if(e.key==="ArrowDown") {
-          selectedIndex = (selectedIndex+1) % items.length;
-        } else if(e.key==="ArrowUp") {
-          selectedIndex = (selectedIndex-1+items.length) % items.length;
-        } else if(e.key==="Enter") {
-          if(selectedIndex>=0) { items[selectedIndex].click(); return; }
-          document.getElementById("goBtn").click();
-        }
-        // Highlight active item
-        for(let i=0;i<items.length;i++){
-          items[i].classList.toggle("active", i===selectedIndex);
-        }
-        if(selectedIndex>=0) items[selectedIndex].scrollIntoView({block:'nearest'});
-      }
+  try {
+    const res = await fetch(`https://api.openrouteservice.org/geocode/search?api_key=${ORS_KEY}&text=${encodeURIComponent(query)}`);
+    if(!res.ok) throw new Error(`HTTP error ${res.status}`);
+    const data = await res.json();
+    if(!data.features || data.features.length===0){ alert("Location not found"); return; }
+
+    selectSuggestion(data.features[0]);
+  } catch(e) {
+    console.error("Error fetching destination:", e);
+  }
+});
+
+// Draw route and ETA
+async function updateRoute() {
+  if(!lastPosition || !destinationMarker) return;
+
+  const coords = [
+    [lastPosition[1], lastPosition[0]],
+    [destinationMarker.getLatLng().lng, destinationMarker.getLatLng().lat]
+  ];
+
+  try {
+    const res = await fetch(`https://api.openrouteservice.org/v2/directions/driving-car/json`, {
+      method: "POST",
+      headers: { "Authorization": ORS_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({ coordinates: coords })
     });
 
-    // Routing and ETA
-    async function updateRoute() {
-      if(!lastPosition || !destinationMarker) return;
-      const origin = [lastPosition[1], lastPosition[0]];
-      const dest = [destinationMarker.getLatLng().lng, destinationMarker.getLatLng().lat];
-      try {
-        const res = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/json', {
-          method: "POST",
-          headers: {"Authorization": ORS_KEY, "Content-Type": "application/json"},
-          body: JSON.stringify({coordinates:[origin, dest]})
-        });
-        if(!res.ok) throw new Error('Routing error');
-        const data = await res.json();
-        const coords = data.features[0].geometry.coordinates.map(c => [c[1],c[0]]);
-        if(routeLayer) map.removeLayer(routeLayer);
-        routeLayer = L.polyline(coords, {color:'blue'}).addTo(map);
-        const sec = data.features[0].properties.segments[0].duration;
-        document.getElementById("eta").innerText = `ETA: ~${Math.round(sec/60)} min`;
-      } catch(err) {
-        console.error(err);
-        document.getElementById("eta").innerText = "Route error";
-      }
-    }
-  </script>
+    if(!res.ok) throw new Error(`HTTP error ${res.status}`);
+    const data = await res.json();
+    if(!data.features || !data.features[0]) return;
+
+    const routeCoords = data.features[0].geometry.coordinates.map(c => [c[1],c[0]]);
+
+    if(routeLayer) map.removeLayer(routeLayer);
+    routeLayer = L.polyline(routeCoords,{color:'blue'}).addTo(map);
+
+    const seconds = data.features[0].properties.segments[0].duration;
+    const mins = Math.round(seconds/60);
+    document.getElementById("eta").innerText = `Estimated arrival: ~${mins} min`;
+  } catch(e) {
+    console.error("Error fetching route:", e);
+  }
+}
+</script>
 </body>
 </html>

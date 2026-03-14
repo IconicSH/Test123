@@ -2,183 +2,297 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Advanced Live Map v2</title>
+<title>Navigation Map</title>
+
 <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+
 <style>
-  #map { height: 100vh; }
-  #controls {
-    position: absolute;
-    top: 10px;
-    left: 80px; /* avoids zoom buttons */
-    z-index: 1000;
-    background: white;
-    padding: 10px;
-    border-radius: 5px;
-    width: 260px;
-  }
-  #search { width: 100%; padding: 5px; }
-  #suggestions {
-    border: 1px solid #ccc;
-    max-height: 120px;
-    overflow-y: auto;
-    background: white;
-    margin-top: 2px;
-  }
-  .suggestion-item {
-    padding: 5px;
-    cursor: pointer;
-  }
-  .suggestion-item:hover { background: #eee; }
-  #eta, #standardAddress { margin-top: 5px; font-size: 0.9em; }
-  #recenterBtn { margin-top: 5px; width: 100%; }
+body {margin:0}
+
+#map{
+height:100vh;
+}
+
+#controls{
+position:absolute;
+top:10px;
+left:80px;
+z-index:1000;
+background:white;
+padding:10px;
+border-radius:6px;
+width:260px;
+box-shadow:0 2px 10px rgba(0,0,0,0.2);
+}
+
+#search{
+width:100%;
+padding:6px;
+}
+
+#suggestions{
+border:1px solid #ccc;
+max-height:120px;
+overflow-y:auto;
+background:white;
+margin-top:2px;
+}
+
+.suggestion{
+padding:5px;
+cursor:pointer;
+}
+
+.suggestion:hover{
+background:#eee;
+}
+
+button{
+margin-top:5px;
+width:100%;
+}
+
+#stats{
+margin-top:6px;
+font-size:14px;
+}
+
 </style>
 </head>
+
 <body>
 
 <div id="controls">
-  <input type="text" id="search" placeholder="Enter destination" autocomplete="off"/>
-  <div id="suggestions"></div>
-  <button id="goBtn">Go</button>
-  <button id="toggleFollow">Follow Me: ON</button>
-  <button id="recenterBtn">Recenter on Me</button>
-  <div id="standardAddress"></div>
-  <div id="eta"></div>
+
+<input id="search" placeholder="Search destination">
+
+<div id="suggestions"></div>
+
+<button id="go">Navigate</button>
+<button id="recenter">Recenter on Me</button>
+
+<div id="stats">
+<div id="speed"></div>
+<div id="distance"></div>
+<div id="eta"></div>
+</div>
+
 </div>
 
 <div id="map"></div>
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
 <script>
-const ORS_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImUwMDJjNzVjMThhOTRiMTJiNDAzZjgwMjQzMWQ3ZWVjIiwiaCI6Im11cm11cjY0In0=";
 
-let followUser = true;
-let userMarker = null;
-let startMarker = null;
-let destinationMarker = null;
-let routeLayer = null;
-let lastPosition = null;
+const ORS_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImUwMDJjNzVjMThhOTRiMTJiNDAzZjgwMjQzMWQ3ZWVjIiwiaCI6Im11cm11cjY0In0="
 
-// Initialize map
-const map = L.map('map').setView([43.7, -79.4], 13);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+let map = L.map("map").setView([43.7,-79.4],13)
 
-// Follow toggle
-document.getElementById("toggleFollow").addEventListener("click", () => {
-  followUser = !followUser;
-  document.getElementById("toggleFollow").innerText = `Follow Me: ${followUser ? "ON" : "OFF"}`;
-});
+L.tileLayer(
+"https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+{maxZoom:19}
+).addTo(map)
 
-// Recenter button
-document.getElementById("recenterBtn").addEventListener("click", () => {
-  if(lastPosition) map.setView(lastPosition, map.getZoom());
-});
+let userMarker
+let destMarker
+let routeLayer
 
-// Watch user location
-navigator.geolocation.watchPosition(function(pos){
-  const latlng = [pos.coords.latitude, pos.coords.longitude];
-  lastPosition = latlng;
+let lastPos=null
+let lastTime=null
+let speed=0
 
-  if(!userMarker) userMarker = L.marker(latlng).addTo(map).bindPopup("You are here").openPopup();
-  else userMarker.setLatLng(latlng);
+const search=document.getElementById("search")
+const suggestions=document.getElementById("suggestions")
 
-  if(!startMarker) startMarker = L.marker(latlng, {icon: L.icon({iconUrl:'https://maps.gstatic.com/mapfiles/ms2/micons/blue-dot.png', iconSize:[32,32]})}).addTo(map).bindPopup("Start");
-  else startMarker.setLatLng(latlng);
+const speedDiv=document.getElementById("speed")
+const distDiv=document.getElementById("distance")
+const etaDiv=document.getElementById("eta")
 
-  if(followUser) map.setView(latlng, map.getZoom());
+// GPS tracking
 
-  if(destinationMarker) updateRoute();
-}, console.error, { enableHighAccuracy: true });
+navigator.geolocation.watchPosition(pos=>{
 
-// Autocomplete
-const searchInput = document.getElementById("search");
-const suggestionsDiv = document.getElementById("suggestions");
-const standardAddressDiv = document.getElementById("standardAddress");
+let lat=pos.coords.latitude
+let lng=pos.coords.longitude
 
-searchInput.addEventListener("input", async () => {
-  const query = searchInput.value;
-  suggestionsDiv.innerHTML = "";
-  standardAddressDiv.innerText = "";
+let now=Date.now()
 
-  if(!query) return;
+if(lastPos){
 
-  try {
-    const res = await fetch(`https://api.openrouteservice.org/geocode/autocomplete?api_key=${ORS_KEY}&text=${encodeURIComponent(query)}`);
-    if(!res.ok) throw new Error(`HTTP error ${res.status}`);
-    const data = await res.json();
-    if(!data.features) return;
+let d=map.distance(lastPos,[lat,lng])
+let t=(now-lastTime)/1000
 
-    data.features.slice(0,5).forEach(f => {
-      const item = document.createElement("div");
-      item.className = "suggestion-item";
-      item.innerText = f.properties.label;
-      item.onclick = () => selectSuggestion(f);
-      suggestionsDiv.appendChild(item);
-    });
-  } catch(e) {
-    console.error("Error fetching suggestions:", e);
-  }
-});
-
-function selectSuggestion(feature){
-  const [lng, lat] = feature.geometry.coordinates;
-
-  if(destinationMarker) destinationMarker.setLatLng([lat,lng]);
-  else destinationMarker = L.marker([lat,lng], {icon:L.icon({iconUrl:'https://maps.gstatic.com/mapfiles/ms2/micons/red-dot.png', iconSize:[32,32]})}).addTo(map).bindPopup("Destination").openPopup();
-
-  updateRoute();
-  standardAddressDiv.innerText = feature.properties.label; // show ORS address without overwriting input
-  suggestionsDiv.innerHTML = "";
+if(t>0){
+speed=(d/t)*3.6
 }
 
-// Go button
-document.getElementById("goBtn").addEventListener("click", async () => {
-  const query = searchInput.value;
-  if(!query) return;
-
-  try {
-    const res = await fetch(`https://api.openrouteservice.org/geocode/search?api_key=${ORS_KEY}&text=${encodeURIComponent(query)}`);
-    if(!res.ok) throw new Error(`HTTP error ${res.status}`);
-    const data = await res.json();
-    if(!data.features || data.features.length===0){ alert("Location not found"); return; }
-
-    selectSuggestion(data.features[0]);
-  } catch(e) {
-    console.error("Error fetching destination:", e);
-  }
-});
-
-// Draw route and ETA
-async function updateRoute() {
-  if(!lastPosition || !destinationMarker) return;
-
-  const coords = [
-    [lastPosition[1], lastPosition[0]],
-    [destinationMarker.getLatLng().lng, destinationMarker.getLatLng().lat]
-  ];
-
-  try {
-    const res = await fetch(`https://api.openrouteservice.org/v2/directions/driving-car/geojson`, {
-      method: "POST",
-      headers: { "Authorization": ORS_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ coordinates: coords })
-    });
-
-    if(!res.ok) throw new Error(`HTTP error ${res.status}`);
-    const data = await res.json();
-    if(!data.features || !data.features[0]) return;
-
-    const routeCoords = data.features[0].geometry.coordinates.map(c => [c[1],c[0]]);
-
-    if(routeLayer) map.removeLayer(routeLayer);
-    routeLayer = L.polyline(routeCoords, {color:'blue', weight:6, opacity:0.7}).addTo(map).bringToFront();
-
-    const seconds = data.features[0].properties.segments[0].duration;
-    const mins = Math.round(seconds/60);
-    document.getElementById("eta").innerText = `Estimated arrival: ~${mins} min`;
-  } catch(e) {
-    console.error("Error fetching route:", e);
-  }
 }
+
+lastPos=[lat,lng]
+lastTime=now
+
+speedDiv.innerText="Speed: "+speed.toFixed(1)+" km/h"
+
+if(!userMarker){
+
+userMarker=L.marker([lat,lng]).addTo(map)
+
+map.setView([lat,lng],16)
+
+}
+else{
+
+userMarker.setLatLng([lat,lng])
+
+}
+
+if(destMarker){
+updateRoute()
+}
+
+},{enableHighAccuracy:true})
+
+// recenter
+
+document.getElementById("recenter").onclick=()=>{
+
+navigator.geolocation.getCurrentPosition(pos=>{
+
+let lat=pos.coords.latitude
+let lng=pos.coords.longitude
+
+map.setView([lat,lng],17)
+
+})
+
+}
+
+// autocomplete
+
+search.addEventListener("input",async()=>{
+
+let q=search.value
+
+suggestions.innerHTML=""
+
+if(q.length<3) return
+
+let url=`https://api.openrouteservice.org/geocode/autocomplete?api_key=${ORS_KEY}&text=${encodeURIComponent(q)}`
+
+let res=await fetch(url)
+
+let data=await res.json()
+
+data.features.slice(0,5).forEach(f=>{
+
+let div=document.createElement("div")
+
+div.className="suggestion"
+
+div.innerText=f.properties.label
+
+div.onclick=()=>selectPlace(f)
+
+suggestions.appendChild(div)
+
+})
+
+})
+
+// select suggestion
+
+function selectPlace(f){
+
+let [lng,lat]=f.geometry.coordinates
+
+if(destMarker){
+destMarker.setLatLng([lat,lng])
+}
+else{
+destMarker=L.marker([lat,lng]).addTo(map)
+}
+
+suggestions.innerHTML=""
+
+updateRoute()
+
+}
+
+// navigate button
+
+document.getElementById("go").onclick=async()=>{
+
+let q=search.value
+
+let url=`https://api.openrouteservice.org/geocode/search?api_key=${ORS_KEY}&text=${encodeURIComponent(q)}`
+
+let res=await fetch(url)
+
+let data=await res.json()
+
+if(data.features.length==0) return
+
+selectPlace(data.features[0])
+
+}
+
+// routing
+
+async function updateRoute(){
+
+if(!lastPos || !destMarker) return
+
+let coords=[
+[lastPos[1],lastPos[0]],
+[destMarker.getLatLng().lng,destMarker.getLatLng().lat]
+]
+
+let res=await fetch(
+"https://api.openrouteservice.org/v2/directions/driving-car/geojson",
+{
+method:"POST",
+headers:{
+Authorization:ORS_KEY,
+"Content-Type":"application/json"
+},
+body:JSON.stringify({coordinates:coords})
+}
+)
+
+let data=await res.json()
+
+let route=data.features[0]
+
+let line=route.geometry.coordinates.map(c=>[c[1],c[0]])
+
+if(routeLayer){
+map.removeLayer(routeLayer)
+}
+
+routeLayer=L.polyline(line,{
+color:"blue",
+weight:6,
+opacity:0.7
+}).addTo(map)
+
+map.fitBounds(routeLayer.getBounds(),{padding:[40,40]})
+
+// distance
+
+let dist=route.properties.segments[0].distance/1000
+distDiv.innerText="Distance: "+dist.toFixed(2)+" km"
+
+// ETA
+
+let sec=route.properties.segments[0].duration
+let min=Math.round(sec/60)
+
+etaDiv.innerText="ETA: "+min+" minutes"
+
+}
+
 </script>
+
 </body>
 </html>

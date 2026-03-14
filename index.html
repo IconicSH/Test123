@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Advanced Live Map</title>
+<title>Advanced Live Map v2</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
 <style>
   #map { height: 100vh; }
   #controls {
     position: absolute;
     top: 10px;
-    left: 80px; /* avoids Leaflet zoom buttons */
+    left: 80px; /* avoids zoom buttons */
     z-index: 1000;
     background: white;
     padding: 10px;
@@ -53,6 +53,7 @@ const ORS_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImUwMDJjNzV
 
 let followUser = true;
 let userMarker = null;
+let startMarker = null;
 let destinationMarker = null;
 let routeLayer = null;
 let lastPosition = null;
@@ -79,6 +80,9 @@ navigator.geolocation.watchPosition(function(pos){
 
   if(!userMarker) userMarker = L.marker(latlng).addTo(map).bindPopup("You are here").openPopup();
   else userMarker.setLatLng(latlng);
+
+  if(!startMarker) startMarker = L.marker(latlng, {icon: L.icon({iconUrl:'https://maps.gstatic.com/mapfiles/ms2/micons/blue-dot.png', iconSize:[32,32]})}).addTo(map).bindPopup("Start");
+  else startMarker.setLatLng(latlng);
 
   if(followUser) map.setView(latlng, map.getZoom());
 
@@ -119,7 +123,7 @@ function selectSuggestion(feature){
   const [lng, lat] = feature.geometry.coordinates;
 
   if(destinationMarker) destinationMarker.setLatLng([lat,lng]);
-  else destinationMarker = L.marker([lat,lng], {color:'red'}).addTo(map).bindPopup("Destination").openPopup();
+  else destinationMarker = L.marker([lat,lng], {icon:L.icon({iconUrl:'https://maps.gstatic.com/mapfiles/ms2/micons/red-dot.png', iconSize:[32,32]})}).addTo(map).bindPopup("Destination").openPopup();
 
   updateRoute();
   standardAddressDiv.innerText = feature.properties.label; // show ORS address without overwriting input
@@ -153,7 +157,7 @@ async function updateRoute() {
   ];
 
   try {
-    const res = await fetch(`https://api.openrouteservice.org/v2/directions/driving-car/json`, {
+    const res = await fetch(`https://api.openrouteservice.org/v2/directions/driving-car/geojson`, {
       method: "POST",
       headers: { "Authorization": ORS_KEY, "Content-Type": "application/json" },
       body: JSON.stringify({ coordinates: coords })
@@ -166,7 +170,7 @@ async function updateRoute() {
     const routeCoords = data.features[0].geometry.coordinates.map(c => [c[1],c[0]]);
 
     if(routeLayer) map.removeLayer(routeLayer);
-    routeLayer = L.polyline(routeCoords,{color:'blue'}).addTo(map);
+    routeLayer = L.polyline(routeCoords, {color:'blue', weight:6, opacity:0.7}).addTo(map).bringToFront();
 
     const seconds = data.features[0].properties.segments[0].duration;
     const mins = Math.round(seconds/60);
